@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Cassa">
+    <meta name="theme-color" content="#2563eb">
+    <link rel="apple-touch-icon" href="icon-cassa-180.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-cassa-192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="icon-cassa-512.png">
+    <title>Prima Nota Cassa</title>
+    <link rel="manifest" href="manifest.json">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        * { -webkit-tap-highlight-color: transparent; }
+        body { overscroll-behavior-y: contain; }
+        input:focus, select:focus, textarea:focus { outline: none; }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        function App() {
+            const [workbook, setWorkbook] = useState(null);
+            const [fileName, setFileName] = useState('');
+            const [descrizioni, setDescrizioni] = useState([]);
+            const [movimenti, setMovimenti] = useState([]);
+            const [newMovimento, setNewMovimento] = useState({
+                data: new Date().toISOString().split('T')[0],
+                descrizione: '',
+                importo: ''
+            });
+            const [filteredDescrizioni, setFilteredDescrizioni] = useState([]);
+            const [showSuggestions, setShowSuggestions] = useState(false);
+            const fileInputRef = useRef(null);
+            const descrizioneInputRef = useRef(null);
+
+            const loadExcelFile = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                setFileName(file.name);
+                const reader = new FileReader();
+
+                reader.onload = (event) => {
+                    const data = new Uint8Array(event.target.result);
+                    const wb = XLSX.read(data, { type: 'array', cellDates: true });
+                    setWorkbook(wb);
+
+                    // Carica descrizioni dal foglio "codici personali"
+                    const codiciSheet = wb.Sheets['codici personali'];
+                    const codiciData = XLSX.utils.sheet_to_json(codiciSheet, { header: 1 });
+                    
+                    const nomiPersone = codiciData
+                        .filter(row => row[1] && row[2]) // COGNOME e NOME
+                        .map(row => `${row[0] || ''} ${row[1]} ${row[2]}`.trim());
+
+                    // Carica descrizioni esistenti dal foglio 2026
+                    const currentYear = new Date().getFullYear();
+                    const yearSheet = wb.Sheets[currentYear.toString()];
+                    if (yearSheet) {
+                        const yearData = XLSX.utils.sheet_to_json(yearSheet);
+                        const descrizioniEsistenti = yearData
+                            .map(row => row.Descrizione)
+                            .filter(d => d && typeof d === 'string');
+                        
+                        // Combina e rimuovi duplicati
+                        const tutteDescrizioni = [...new Set([...nomiPersone, ...descrizioniEsistenti])].sort();
+                        setDescrizioni(tutteDescrizioni);
+                    } else {
+                        setDescrizioni(nomiPersone.sort());
+                    }
+
+                    // Carica movimenti dal foglio corrente (se esistono, oltre al saldo iniziale)
+                    if (yearSheet) {
+                        const yearData = XLSX.utils.sheet_to_json(yearSheet);
+                        const movimentiCaricati = yearData
+                            .slice(1) // Salta il saldo iniziale
+                            .map(row => ({
+                                data: row.Data ? new Date(row.Data).toISOString().split('T')[0] : '',
+                                descrizione: row.Descrizione || '',
+                                importo: row.Entrate ? parseFloat(row.Entrate) : (row.Uscite ? -parseFloat(row.Uscite) : 0)
+                            }));
+                        setMovimenti(movimentiCaricati);
+                    }
+                };
+
+                reader.readAsArrayBuffer(file);
+            };
+
+            const handleDescrizioneChange = (value) => {
+                setNewMovimento({ ...newMovimento, descrizione: value });
+                
+                if (value.length > 0) {
+                    const filtered = descrizioni.filter(d => 
+                        d.toLowerCase().includes(value.toLowerCase())
+                    ).slice(0, 10);
+                    setFilteredDescrizioni(filtered);
+                    setShowSuggestions(true);
+                } else {
+                    setShowSuggestions(false);
+                }
+            };
+
+            const selectDescrizione = (desc) => {
+                setNewMovimento({ ...newMovimento, descrizione: desc });
+                setShowSuggestions(false);
+            };
+
+            const addMovimento = () => {
+                if (!newMovimento.data || !newMovimento.descrizione || !newMovimento.importo) {
+                    alert('Compila tutti i campi');
+                    return;
+                }
+
+                const importo = parseFloat(newMovimento.importo);
+                if (isNaN(importo)) {
+                    alert('Importo non valido');
+                    return;
+                }
+
+                setMovimenti([...movimenti, {
+                    data: newMovimento.data,
+                    descrizione: newMovimento.descrizione,
+                    importo: importo
+                }]);
+
+                // Reset form
+                setNewMovimento({
+                    data: new Date().toISOString().split('T')[0],
+                    descrizione: '',
+                    importo: ''
+                });
+            };
+
+            const deleteMovimento = (index) => {
+                setMovimenti(movimenti.filter((_, i) => i !== index));
+            };
+
+            const updateExcel = () => {
+                if (!workbook) {
+                    alert('Carica prima il file Excel');
+                    return;
+                }
+
+                if (movimenti.length === 0) {
+                    alert('Nessun movimento da aggiungere');
+                    return;
+                }
+
+                const currentYear = new Date().getFullYear();
+                const sheetName = currentYear.toString();
+                const sheet = workbook.Sheets[sheetName];
+
+                if (!sheet) {
+                    alert(`Foglio ${currentYear} non trovato`);
+                    return;
+                }
+
+                // Leggi i dati esistenti
+                const existingData = XLSX.utils.sheet_to_json(sheet);
+                const lastDoc = existingData.length > 0 ? Math.max(...existingData.map(r => r.Doc || 0)) : 0;
+                const lastRow = existingData.length;
+
+                // Calcola l'ultimo saldo
+                let lastSaldo = existingData.length > 0 ? existingData[existingData.length - 1].Saldo : 0;
+                if (isNaN(lastSaldo)) lastSaldo = 0;
+
+                // Prepara i nuovi movimenti
+                const newRows = movimenti.map((mov, index) => {
+                    const doc = lastDoc + index + 1;
+                    const entrate = mov.importo > 0 ? mov.importo : null;
+                    const uscite = mov.importo < 0 ? Math.abs(mov.importo) : null;
+                    
+                    // Calcola il nuovo saldo
+                    lastSaldo = lastSaldo + (mov.importo);
+
+                    return {
+                        Doc: doc,
+                        Data: new Date(mov.data),
+                        Descrizione: mov.descrizione,
+                        Entrate: entrate,
+                        Uscite: uscite,
+                        Saldo: lastSaldo
+                    };
+                });
+
+                // Aggiungi le nuove righe al foglio
+                const updatedData = [...existingData, ...newRows];
+                const newSheet = XLSX.utils.json_to_sheet(updatedData);
+
+                // Copia le formule e la formattazione dal foglio originale (se necessario)
+                // Per ora usiamo valori calcolati per il saldo
+
+                workbook.Sheets[sheetName] = newSheet;
+
+                // Genera il file Excel aggiornato
+                const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+                const blob = new Blob([wbout], { type: 'application/octet-stream' });
+                
+                // Download
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName || 'cassa_contante_aggiornato.xlsx';
+                a.click();
+                URL.revokeObjectURL(url);
+
+                // Reset movimenti dopo l'export
+                setMovimenti([]);
+                alert('File Excel aggiornato e scaricato! Ora puoi caricarlo su Dropbox.');
+            };
+
+            return (
+                <div className="min-h-screen pb-20">
+                    {/* Header */}
+                    <div className="bg-blue-600 text-white p-4 sticky top-0 z-10 shadow-lg">
+                        <h1 className="text-xl font-bold">💰 Prima Nota Cassa</h1>
+                    </div>
+
+                    <div className="p-4 space-y-4">
+                        {/* Carica File */}
+                        {!workbook && (
+                            <div className="bg-white rounded-lg shadow-md p-6">
+                                <h2 className="text-lg font-semibold mb-3">📂 Carica File Excel</h2>
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    accept=".xlsx,.xls"
+                                    onChange={loadExcelFile}
+                                    className="hidden"
+                                />
+                                <button
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold active:bg-blue-700"
+                                >
+                                    Seleziona File da Dropbox
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Info File Caricato */}
+                        {workbook && (
+                            <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-sm text-green-800 font-semibold">✓ File caricato</p>
+                                        <p className="text-xs text-green-600">{fileName}</p>
+                                    </div>
+                                    <button
+                                        onClick={() => {
+                                            setWorkbook(null);
+                                            setFileName('');
+                                            setMovimenti([]);
+                                        }}
+                                        className="text-red-600 text-sm font-semibold"
+                                    >
+                                        Cambia
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Form Inserimento */}
+                        {workbook && (
+                            <div className="bg-white rounded-lg shadow-md p-4">
+                                <h2 className="text-lg font-semibold mb-4">➕ Nuovo Movimento</h2>
+                                
+                                {/* Data */}
+                                <div className="mb-4">
+                                    <label className="block text-sm font-semibold mb-2">📅 Data</label>
+                                    <input
+                                        type="date"
+                                        value={newMovimento.data}
+                                        onChange={(e) => setNewMovimento({ ...newMovimento, data: e.target.value })}
+                                        className="w-full border border-gray-300 rounded-lg p-3 text-base"
+                                    />
+                                </div>
+
+                                {/* Descrizione */}
+                                <div className="mb-4 relative">
+                                    <label className="block text-sm font-semibold mb-2">📝 Descrizione</label>
+                                    <input
+                                        ref={descrizioneInputRef}
+                                        type="text"
+                                        value={newMovimento.descrizione}
+                                        onChange={(e) => handleDescrizioneChange(e.target.value)}
+                                        onFocus={() => {
+                                            if (newMovimento.descrizione.length > 0) {
+                                                setShowSuggestions(true);
+                                            }
+                                        }}
+                                        onBlur={() => {
+                                            // Delay per permettere il click sui suggerimenti
+                                            setTimeout(() => setShowSuggestions(false), 200);
+                                        }}
+                                        className="w-full border border-gray-300 rounded-lg p-3 text-base"
+                                        placeholder="Inizia a digitare..."
+                                    />
+                                    
+                                    {/* Suggerimenti */}
+                                    {showSuggestions && filteredDescrizioni.length > 0 && (
+                                        <div className="absolute z-20 w-full bg-white border border-gray-300 rounded-lg mt-1 shadow-lg max-h-60 overflow-y-auto">
+                                            {filteredDescrizioni.map((desc, index) => (
+                                                <div
+                                                    key={index}
+                                                    onClick={() => selectDescrizione(desc)}
+                                                    className="p-3 hover:bg-blue-50 cursor-pointer border-b border-gray-100 active:bg-blue-100"
+                                                >
+                                                    {desc}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Importo */}
+                                <div className="mb-4">
+                                    <label className="block text-sm font-semibold mb-2">💰 Importo</label>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        value={newMovimento.importo}
+                                        onChange={(e) => setNewMovimento({ ...newMovimento, importo: e.target.value })}
+                                        className="w-full border border-gray-300 rounded-lg p-3 text-base"
+                                        placeholder="+100 incasso, -50 pagamento"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">Usa + per incassi, - per pagamenti</p>
+                                </div>
+
+                                <button
+                                    onClick={addMovimento}
+                                    className="w-full bg-green-600 text-white py-3 rounded-lg font-semibold active:bg-green-700"
+                                >
+                                    Aggiungi Movimento
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Lista Movimenti */}
+                        {movimenti.length > 0 && (
+                            <div className="bg-white rounded-lg shadow-md p-4">
+                                <div className="flex items-center justify-between mb-4">
+                                    <h2 className="text-lg font-semibold">📋 Movimenti ({movimenti.length})</h2>
+                                    <button
+                                        onClick={updateExcel}
+                                        className="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-sm active:bg-blue-700"
+                                    >
+                                        💾 Aggiorna Excel
+                                    </button>
+                                </div>
+
+                                <div className="space-y-2">
+                                    {movimenti.map((mov, index) => (
+                                        <div key={index} className="border border-gray-200 rounded-lg p-3">
+                                            <div className="flex justify-between items-start">
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <span className="text-sm text-gray-600">{mov.data}</span>
+                                                        <span className={`font-bold ${mov.importo >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                            {mov.importo >= 0 ? '+' : ''}{mov.importo.toFixed(2)} €
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-sm text-gray-800">{mov.descrizione}</p>
+                                                </div>
+                                                <button
+                                                    onClick={() => deleteMovimento(index)}
+                                                    className="text-red-600 text-xl ml-2"
+                                                >
+                                                    ×
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Istruzioni */}
+                        {workbook && movimenti.length === 0 && (
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                                <h3 className="font-semibold text-blue-900 mb-2">ℹ️ Come funziona</h3>
+                                <ol className="text-sm text-blue-800 space-y-1 list-decimal list-inside">
+                                    <li>Inserisci i movimenti usando il form sopra</li>
+                                    <li>I movimenti vengono salvati temporaneamente nell'app</li>
+                                    <li>Quando hai finito, premi "Aggiorna Excel"</li>
+                                    <li>Il file aggiornato viene scaricato sul tuo iPhone</li>
+                                    <li>Caricalo su Dropbox per sostituire quello vecchio</li>
+                                </ol>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+
+        // Service Worker per PWA
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register(
+                'data:text/javascript;base64,' + btoa(`
+                    self.addEventListener('install', (e) => {
+                        e.waitUntil(caches.open('pwa-cache').then(cache => {
+                            return cache.addAll(['/']);
+                        }));
+                    });
+                    self.addEventListener('fetch', (e) => {
+                        e.respondWith(
+                            caches.match(e.request).then(response => {
+                                return response || fetch(e.request);
+                            })
+                        );
+                    });
+                `)
+            );
+        }
+    </script>
+</body>
+</html>
