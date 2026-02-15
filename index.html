@@ -30,8 +30,6 @@
         const { useState, useEffect, useRef } = React;
 
         function App() {
-            const [workbook, setWorkbook] = useState(null);
-            const [fileName, setFileName] = useState('');
             const [descrizioni, setDescrizioni] = useState([]);
             const [movimenti, setMovimenti] = useState([]);
             const [newMovimento, setNewMovimento] = useState({
@@ -41,30 +39,57 @@
             });
             const [filteredDescrizioni, setFilteredDescrizioni] = useState([]);
             const [showSuggestions, setShowSuggestions] = useState(false);
+            const [loaded, setLoaded] = useState(false);
             const fileInputRef = useRef(null);
             const descrizioneInputRef = useRef(null);
+
+            // Carica descrizioni salvate o mostra file picker
+            useEffect(() => {
+                const saved = localStorage.getItem('descrizioni');
+                if (saved) {
+                    setDescrizioni(JSON.parse(saved));
+                    setLoaded(true);
+                }
+                
+                const savedMovimenti = localStorage.getItem('movimenti');
+                if (savedMovimenti) {
+                    setMovimenti(JSON.parse(savedMovimenti));
+                }
+            }, []);
+
+            // Salva movimenti in localStorage
+            useEffect(() => {
+                if (movimenti.length > 0) {
+                    localStorage.setItem('movimenti', JSON.stringify(movimenti));
+                } else {
+                    localStorage.removeItem('movimenti');
+                }
+            }, [movimenti]);
 
             const loadExcelFile = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
 
-                setFileName(file.name);
                 const reader = new FileReader();
 
                 reader.onload = (event) => {
                     const data = new Uint8Array(event.target.result);
-                    const wb = XLSX.read(data, { type: 'array', cellDates: true, cellFormula: true, cellStyles: true });
-                    setWorkbook(wb);
+                    const wb = XLSX.read(data, { type: 'array' });
 
                     // Carica descrizioni dal foglio "codici personali"
                     const codiciSheet = wb.Sheets['codici personali'];
+                    if (!codiciSheet) {
+                        alert('Foglio "codici personali" non trovato');
+                        return;
+                    }
+                    
                     const codiciData = XLSX.utils.sheet_to_json(codiciSheet, { header: 1 });
                     
                     const nomiPersone = codiciData
                         .filter(row => row[1] && row[2]) // COGNOME e NOME
                         .map(row => `${row[0] || ''} ${row[1]} ${row[2]}`.trim());
 
-                    // Carica descrizioni esistenti dal foglio 2026
+                    // Carica descrizioni esistenti dal foglio anno corrente
                     const currentYear = new Date().getFullYear();
                     const yearSheet = wb.Sheets[currentYear.toString()];
                     if (yearSheet) {
@@ -76,22 +101,14 @@
                         // Combina e rimuovi duplicati
                         const tutteDescrizioni = [...new Set([...nomiPersone, ...descrizioniEsistenti])].sort();
                         setDescrizioni(tutteDescrizioni);
+                        localStorage.setItem('descrizioni', JSON.stringify(tutteDescrizioni));
                     } else {
-                        setDescrizioni(nomiPersone.sort());
+                        const sorted = nomiPersone.sort();
+                        setDescrizioni(sorted);
+                        localStorage.setItem('descrizioni', JSON.stringify(sorted));
                     }
 
-                    // Carica movimenti dal foglio corrente (se esistono, oltre al saldo iniziale)
-                    if (yearSheet) {
-                        const yearData = XLSX.utils.sheet_to_json(yearSheet);
-                        const movimentiCaricati = yearData
-                            .slice(1) // Salta il saldo iniziale
-                            .map(row => ({
-                                data: row.Data ? new Date(row.Data).toISOString().split('T')[0] : '',
-                                descrizione: row.Descrizione || '',
-                                importo: row.Entrate ? parseFloat(row.Entrate) : (row.Uscite ? -parseFloat(row.Uscite) : 0)
-                            }));
-                        setMovimenti(movimentiCaricati);
-                    }
+                    setLoaded(true);
                 };
 
                 reader.readAsArrayBuffer(file);
@@ -146,92 +163,40 @@
                 setMovimenti(movimenti.filter((_, i) => i !== index));
             };
 
-            const updateExcel = () => {
-                if (!workbook) {
-                    alert('Carica prima il file Excel');
-                    return;
-                }
-
+            const downloadCSV = () => {
                 if (movimenti.length === 0) {
-                    alert('Nessun movimento da aggiungere');
+                    alert('Nessun movimento da esportare');
                     return;
                 }
 
-                const currentYear = new Date().getFullYear();
-                const sheetName = currentYear.toString();
-                const sheet = workbook.Sheets[sheetName];
-
-                if (!sheet) {
-                    alert(`Foglio ${currentYear} non trovato`);
-                    return;
-                }
-
-                // Trova l'ultimo numero di riga con dati
-                const range = XLSX.utils.decode_range(sheet['!ref']);
-                const lastRow = range.e.r; // ultima riga (0-indexed)
+                // Crea CSV con intestazioni
+                let csv = 'Data,Descrizione,Importo\n';
                 
-                // Trova l'ultimo Doc e Saldo dalla riga precedente
-                let lastDoc = 0;
-                let lastSaldo = 0;
-                
-                // Cerca nelle ultime righe per trovare valori validi
-                for (let row = lastRow; row >= 1; row--) {
-                    const docCell = sheet[XLSX.utils.encode_cell({r: row, c: 0})]; // colonna A (Doc)
-                    const saldoCell = sheet[XLSX.utils.encode_cell({r: row, c: 3})]; // colonna D (Saldo)
-                    
-                    if (docCell && docCell.v !== undefined && !isNaN(docCell.v)) {
-                        lastDoc = parseInt(docCell.v);
-                    }
-                    if (saldoCell && saldoCell.v !== undefined && !isNaN(saldoCell.v)) {
-                        lastSaldo = parseFloat(saldoCell.v);
-                        break;
-                    }
-                }
-
-                // Prepara le nuove righe come array
-                const newRows = [];
-                let currentSaldo = lastSaldo;
-                
-                movimenti.forEach((mov, index) => {
-                    const doc = lastDoc + index + 1;
-                    const dataObj = new Date(mov.data);
-                    const entrate = mov.importo > 0 ? mov.importo : '';
-                    const uscite = mov.importo < 0 ? Math.abs(mov.importo) : '';
-                    currentSaldo = currentSaldo + mov.importo;
-                    
-                    // Array: [Doc, Data, Descrizione, Saldo, Entrate, Uscite]
-                    newRows.push([
-                        doc,
-                        dataObj,
-                        mov.descrizione,
-                        currentSaldo,
-                        entrate,
-                        uscite
-                    ]);
+                movimenti.forEach(mov => {
+                    // Escape virgolette nella descrizione
+                    const desc = mov.descrizione.replace(/"/g, '""');
+                    csv += `${mov.data},"${desc}",${mov.importo}\n`;
                 });
 
-                // Aggiungi le nuove righe al foglio esistente
-                XLSX.utils.sheet_add_aoa(sheet, newRows, { origin: lastRow + 1 });
-
-                // Genera il file Excel aggiornato
-                const wbout = XLSX.write(workbook, { 
-                    bookType: 'xlsx', 
-                    type: 'array',
-                    cellDates: true
-                });
-                const blob = new Blob([wbout], { type: 'application/octet-stream' });
-                
                 // Download
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = fileName || 'cassa_contante_aggiornato.xlsx';
+                const timestamp = new Date().toISOString().split('T')[0];
+                a.download = `movimenti_${timestamp}.csv`;
                 a.click();
                 URL.revokeObjectURL(url);
 
-                // Reset movimenti dopo l'export
-                setMovimenti([]);
-                alert('File Excel aggiornato! Caricalo su Dropbox per sostituire quello vecchio.');
+                alert('CSV scaricato! Ora trasferiscilo sul PC e esegui lo script Python per aggiornare l\'Excel.');
+            };
+
+            const resetDescrizioni = () => {
+                if (confirm('Vuoi ricaricare le descrizioni dal file Excel?')) {
+                    localStorage.removeItem('descrizioni');
+                    setDescrizioni([]);
+                    setLoaded(false);
+                }
             };
 
             return (
@@ -239,13 +204,18 @@
                     {/* Header */}
                     <div className="bg-blue-600 text-white p-4 sticky top-0 z-10 shadow-lg">
                         <h1 className="text-xl font-bold">💰 Prima Nota Cassa</h1>
+                        <p className="text-xs text-blue-100 mt-1">Genera CSV per aggiornamento Excel</p>
                     </div>
 
                     <div className="p-4 space-y-4">
-                        {/* Carica File */}
-                        {!workbook && (
+                        {/* Carica File Excel (solo prima volta) */}
+                        {!loaded && (
                             <div className="bg-white rounded-lg shadow-md p-6">
-                                <h2 className="text-lg font-semibold mb-3">📂 Carica File Excel</h2>
+                                <h2 className="text-lg font-semibold mb-3">📂 Setup Iniziale</h2>
+                                <p className="text-sm text-gray-600 mb-4">
+                                    Carica il file Excel per importare le descrizioni. 
+                                    Devi farlo solo la prima volta!
+                                </p>
                                 <input
                                     ref={fileInputRef}
                                     type="file"
@@ -257,35 +227,31 @@
                                     onClick={() => fileInputRef.current?.click()}
                                     className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold active:bg-blue-700"
                                 >
-                                    Seleziona File da Dropbox
+                                    Carica File Excel
                                 </button>
                             </div>
                         )}
 
-                        {/* Info File Caricato */}
-                        {workbook && (
+                        {/* Info descrizioni caricate */}
+                        {loaded && (
                             <div className="bg-green-50 border border-green-200 rounded-lg p-3">
                                 <div className="flex items-center justify-between">
                                     <div>
-                                        <p className="text-sm text-green-800 font-semibold">✓ File caricato</p>
-                                        <p className="text-xs text-green-600">{fileName}</p>
+                                        <p className="text-sm text-green-800 font-semibold">✓ Descrizioni caricate</p>
+                                        <p className="text-xs text-green-600">{descrizioni.length} voci disponibili</p>
                                     </div>
                                     <button
-                                        onClick={() => {
-                                            setWorkbook(null);
-                                            setFileName('');
-                                            setMovimenti([]);
-                                        }}
-                                        className="text-red-600 text-sm font-semibold"
+                                        onClick={resetDescrizioni}
+                                        className="text-blue-600 text-sm font-semibold"
                                     >
-                                        Cambia
+                                        Ricarica
                                     </button>
                                 </div>
                             </div>
                         )}
 
                         {/* Form Inserimento */}
-                        {workbook && (
+                        {loaded && (
                             <div className="bg-white rounded-lg shadow-md p-4">
                                 <h2 className="text-lg font-semibold mb-4">➕ Nuovo Movimento</h2>
                                 
@@ -314,7 +280,6 @@
                                             }
                                         }}
                                         onBlur={() => {
-                                            // Delay per permettere il click sui suggerimenti
                                             setTimeout(() => setShowSuggestions(false), 200);
                                         }}
                                         className="w-full border border-gray-300 rounded-lg p-3 text-base"
@@ -366,10 +331,10 @@
                                 <div className="flex items-center justify-between mb-4">
                                     <h2 className="text-lg font-semibold">📋 Movimenti ({movimenti.length})</h2>
                                     <button
-                                        onClick={updateExcel}
+                                        onClick={downloadCSV}
                                         className="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-sm active:bg-blue-700"
                                     >
-                                        💾 Aggiorna Excel
+                                        💾 Scarica CSV
                                     </button>
                                 </div>
 
@@ -396,19 +361,45 @@
                                         </div>
                                     ))}
                                 </div>
+
+                                <div className="mt-4 pt-4 border-t border-gray-200">
+                                    <button
+                                        onClick={() => {
+                                            if (confirm('Cancellare tutti i movimenti?')) {
+                                                setMovimenti([]);
+                                            }
+                                        }}
+                                        className="text-red-600 text-sm font-semibold"
+                                    >
+                                        🗑️ Cancella tutti
+                                    </button>
+                                </div>
                             </div>
                         )}
 
                         {/* Istruzioni */}
-                        {workbook && movimenti.length === 0 && (
+                        {loaded && movimenti.length === 0 && (
                             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                                 <h3 className="font-semibold text-blue-900 mb-2">ℹ️ Come funziona</h3>
                                 <ol className="text-sm text-blue-800 space-y-1 list-decimal list-inside">
                                     <li>Inserisci i movimenti usando il form sopra</li>
-                                    <li>I movimenti vengono salvati temporaneamente nell'app</li>
-                                    <li>Quando hai finito, premi "Aggiorna Excel"</li>
-                                    <li>Il file aggiornato viene scaricato sul tuo iPhone</li>
-                                    <li>Caricalo su Dropbox per sostituire quello vecchio</li>
+                                    <li>Quando hai finito, premi "Scarica CSV"</li>
+                                    <li>Trasferisci il file CSV sul PC (email, AirDrop, Dropbox)</li>
+                                    <li>Esegui lo script Python sul PC per aggiornare l'Excel</li>
+                                    <li>Ricarica l'Excel aggiornato su Dropbox</li>
+                                </ol>
+                            </div>
+                        )}
+
+                        {/* Istruzioni CSV scaricato */}
+                        {movimenti.length > 0 && (
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                                <h3 className="font-semibold text-yellow-900 mb-2">📋 Prossimi passi</h3>
+                                <ol className="text-sm text-yellow-800 space-y-1 list-decimal list-inside">
+                                    <li>Scarica il CSV premendo il pulsante sopra</li>
+                                    <li>Trasferiscilo sul PC (AirDrop, email, Dropbox)</li>
+                                    <li>Metti il CSV nella stessa cartella dell'Excel</li>
+                                    <li>Esegui: <code className="bg-yellow-100 px-1 rounded">python aggiorna_cassa.py</code></li>
                                 </ol>
                             </div>
                         )}
