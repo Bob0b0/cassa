@@ -166,42 +166,60 @@
                     return;
                 }
 
-                // Leggi i dati esistenti
-                const existingData = XLSX.utils.sheet_to_json(sheet);
-                const lastDoc = existingData.length > 0 ? Math.max(...existingData.map(r => r.Doc || 0)) : 0;
-                const lastRow = existingData.length;
-
-                // Calcola l'ultimo saldo
-                let lastSaldo = existingData.length > 0 ? existingData[existingData.length - 1].Saldo : 0;
-                if (isNaN(lastSaldo)) lastSaldo = 0;
-
-                // Prepara i nuovi movimenti
-                const newRows = movimenti.map((mov, index) => {
-                    const doc = lastDoc + index + 1;
-                    const entrate = mov.importo > 0 ? mov.importo : null;
-                    const uscite = mov.importo < 0 ? Math.abs(mov.importo) : null;
+                // Trova l'ultimo numero di riga con dati
+                const range = XLSX.utils.decode_range(sheet['!ref']);
+                let lastRow = range.e.r; // ultima riga
+                
+                // Trova l'ultimo Doc e Saldo
+                let lastDoc = 0;
+                let lastSaldo = 0;
+                
+                for (let row = lastRow; row >= 1; row--) {
+                    const docCell = sheet[XLSX.utils.encode_cell({r: row, c: 0})]; // colonna A (Doc)
+                    const saldoCell = sheet[XLSX.utils.encode_cell({r: row, c: 4})]; // colonna E (Saldo)
                     
-                    // Calcola il nuovo saldo
-                    lastSaldo = lastSaldo + (mov.importo);
+                    if (docCell && docCell.v) {
+                        lastDoc = parseInt(docCell.v) || 0;
+                    }
+                    if (saldoCell && saldoCell.v !== undefined) {
+                        lastSaldo = parseFloat(saldoCell.v) || 0;
+                        break;
+                    }
+                }
 
-                    return {
-                        Doc: doc,
-                        Data: new Date(mov.data),
-                        Descrizione: mov.descrizione,
-                        Entrate: entrate,
-                        Uscite: uscite,
-                        Saldo: lastSaldo
-                    };
+                // Aggiungi le nuove righe al foglio esistente
+                movimenti.forEach((mov, index) => {
+                    const newRow = lastRow + index + 1;
+                    const doc = lastDoc + index + 1;
+                    
+                    // Calcola entrate/uscite
+                    const entrate = mov.importo > 0 ? mov.importo : '';
+                    const uscite = mov.importo < 0 ? Math.abs(mov.importo) : '';
+                    
+                    // Calcola nuovo saldo
+                    lastSaldo = lastSaldo + mov.importo;
+                    
+                    // Converti la data in formato Excel
+                    const dataObj = new Date(mov.data);
+                    const excelDate = XLSX.SSF.parse_date_code((dataObj - new Date(1899, 11, 30)) / (24 * 60 * 60 * 1000));
+                    
+                    // Scrivi le celle (A=Doc, B=Data, C=Descrizione, D=Saldo, E=Entrate, F=Uscite)
+                    sheet[XLSX.utils.encode_cell({r: newRow, c: 0})] = { t: 'n', v: doc };
+                    sheet[XLSX.utils.encode_cell({r: newRow, c: 1})] = { t: 'n', v: (dataObj - new Date(1899, 11, 30)) / (24 * 60 * 60 * 1000), z: 'd/m/yyyy' };
+                    sheet[XLSX.utils.encode_cell({r: newRow, c: 2})] = { t: 's', v: mov.descrizione };
+                    sheet[XLSX.utils.encode_cell({r: newRow, c: 3})] = { t: 'n', v: lastSaldo };
+                    
+                    if (entrate !== '') {
+                        sheet[XLSX.utils.encode_cell({r: newRow, c: 4})] = { t: 'n', v: entrate };
+                    }
+                    if (uscite !== '') {
+                        sheet[XLSX.utils.encode_cell({r: newRow, c: 5})] = { t: 'n', v: uscite };
+                    }
                 });
 
-                // Aggiungi le nuove righe al foglio
-                const updatedData = [...existingData, ...newRows];
-                const newSheet = XLSX.utils.json_to_sheet(updatedData);
-
-                // Copia le formule e la formattazione dal foglio originale (se necessario)
-                // Per ora usiamo valori calcolati per il saldo
-
-                workbook.Sheets[sheetName] = newSheet;
+                // Aggiorna il range del foglio
+                range.e.r = lastRow + movimenti.length;
+                sheet['!ref'] = XLSX.utils.encode_range(range);
 
                 // Genera il file Excel aggiornato
                 const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
