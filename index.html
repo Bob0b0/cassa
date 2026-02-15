@@ -53,7 +53,7 @@
 
                 reader.onload = (event) => {
                     const data = new Uint8Array(event.target.result);
-                    const wb = XLSX.read(data, { type: 'array', cellDates: true });
+                    const wb = XLSX.read(data, { type: 'array', cellDates: true, cellFormula: true, cellStyles: true });
                     setWorkbook(wb);
 
                     // Carica descrizioni dal foglio "codici personali"
@@ -168,61 +168,57 @@
 
                 // Trova l'ultimo numero di riga con dati
                 const range = XLSX.utils.decode_range(sheet['!ref']);
-                let lastRow = range.e.r; // ultima riga
+                const lastRow = range.e.r; // ultima riga (0-indexed)
                 
-                // Trova l'ultimo Doc e Saldo
+                // Trova l'ultimo Doc e Saldo dalla riga precedente
                 let lastDoc = 0;
                 let lastSaldo = 0;
                 
+                // Cerca nelle ultime righe per trovare valori validi
                 for (let row = lastRow; row >= 1; row--) {
                     const docCell = sheet[XLSX.utils.encode_cell({r: row, c: 0})]; // colonna A (Doc)
-                    const saldoCell = sheet[XLSX.utils.encode_cell({r: row, c: 4})]; // colonna E (Saldo)
+                    const saldoCell = sheet[XLSX.utils.encode_cell({r: row, c: 3})]; // colonna D (Saldo)
                     
-                    if (docCell && docCell.v) {
-                        lastDoc = parseInt(docCell.v) || 0;
+                    if (docCell && docCell.v !== undefined && !isNaN(docCell.v)) {
+                        lastDoc = parseInt(docCell.v);
                     }
-                    if (saldoCell && saldoCell.v !== undefined) {
-                        lastSaldo = parseFloat(saldoCell.v) || 0;
+                    if (saldoCell && saldoCell.v !== undefined && !isNaN(saldoCell.v)) {
+                        lastSaldo = parseFloat(saldoCell.v);
                         break;
                     }
                 }
 
-                // Aggiungi le nuove righe al foglio esistente
+                // Prepara le nuove righe come array
+                const newRows = [];
+                let currentSaldo = lastSaldo;
+                
                 movimenti.forEach((mov, index) => {
-                    const newRow = lastRow + index + 1;
                     const doc = lastDoc + index + 1;
-                    
-                    // Calcola entrate/uscite
+                    const dataObj = new Date(mov.data);
                     const entrate = mov.importo > 0 ? mov.importo : '';
                     const uscite = mov.importo < 0 ? Math.abs(mov.importo) : '';
+                    currentSaldo = currentSaldo + mov.importo;
                     
-                    // Calcola nuovo saldo
-                    lastSaldo = lastSaldo + mov.importo;
-                    
-                    // Converti la data in formato Excel
-                    const dataObj = new Date(mov.data);
-                    const excelDate = XLSX.SSF.parse_date_code((dataObj - new Date(1899, 11, 30)) / (24 * 60 * 60 * 1000));
-                    
-                    // Scrivi le celle (A=Doc, B=Data, C=Descrizione, D=Saldo, E=Entrate, F=Uscite)
-                    sheet[XLSX.utils.encode_cell({r: newRow, c: 0})] = { t: 'n', v: doc };
-                    sheet[XLSX.utils.encode_cell({r: newRow, c: 1})] = { t: 'n', v: (dataObj - new Date(1899, 11, 30)) / (24 * 60 * 60 * 1000), z: 'd/m/yyyy' };
-                    sheet[XLSX.utils.encode_cell({r: newRow, c: 2})] = { t: 's', v: mov.descrizione };
-                    sheet[XLSX.utils.encode_cell({r: newRow, c: 3})] = { t: 'n', v: lastSaldo };
-                    
-                    if (entrate !== '') {
-                        sheet[XLSX.utils.encode_cell({r: newRow, c: 4})] = { t: 'n', v: entrate };
-                    }
-                    if (uscite !== '') {
-                        sheet[XLSX.utils.encode_cell({r: newRow, c: 5})] = { t: 'n', v: uscite };
-                    }
+                    // Array: [Doc, Data, Descrizione, Saldo, Entrate, Uscite]
+                    newRows.push([
+                        doc,
+                        dataObj,
+                        mov.descrizione,
+                        currentSaldo,
+                        entrate,
+                        uscite
+                    ]);
                 });
 
-                // Aggiorna il range del foglio
-                range.e.r = lastRow + movimenti.length;
-                sheet['!ref'] = XLSX.utils.encode_range(range);
+                // Aggiungi le nuove righe al foglio esistente
+                XLSX.utils.sheet_add_aoa(sheet, newRows, { origin: lastRow + 1 });
 
                 // Genera il file Excel aggiornato
-                const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+                const wbout = XLSX.write(workbook, { 
+                    bookType: 'xlsx', 
+                    type: 'array',
+                    cellDates: true
+                });
                 const blob = new Blob([wbout], { type: 'application/octet-stream' });
                 
                 // Download
@@ -235,7 +231,7 @@
 
                 // Reset movimenti dopo l'export
                 setMovimenti([]);
-                alert('File Excel aggiornato e scaricato! Ora puoi caricarlo su Dropbox.');
+                alert('File Excel aggiornato! Caricalo su Dropbox per sostituire quello vecchio.');
             };
 
             return (
