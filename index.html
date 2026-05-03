@@ -40,6 +40,8 @@
             const [filteredDescrizioni, setFilteredDescrizioni] = useState([]);
             const [showSuggestions, setShowSuggestions] = useState(false);
             const [loaded, setLoaded] = useState(false);
+            const [showGestioneDescrizioni, setShowGestioneDescrizioni] = useState(false);
+            const [nuovaDescrizione, setNuovaDescrizione] = useState('');
             const fileInputRef = useRef(null);
             const descrizioneInputRef = useRef(null);
 
@@ -206,6 +208,31 @@
                 }
             };
 
+            const aggiungiDescrizione = () => {
+                if (!nuovaDescrizione.trim()) {
+                    alert('Inserisci una descrizione');
+                    return;
+                }
+                
+                if (descrizioni.includes(nuovaDescrizione.trim())) {
+                    alert('Questa descrizione esiste già');
+                    return;
+                }
+                
+                const nuovaLista = [...descrizioni, nuovaDescrizione.trim()].sort();
+                setDescrizioni(nuovaLista);
+                localStorage.setItem('descrizioni', JSON.stringify(nuovaLista));
+                setNuovaDescrizione('');
+            };
+
+            const rimuoviDescrizione = (desc) => {
+                if (confirm(`Rimuovere "${desc}"?`)) {
+                    const nuovaLista = descrizioni.filter(d => d !== desc);
+                    setDescrizioni(nuovaLista);
+                    localStorage.setItem('descrizioni', JSON.stringify(nuovaLista));
+                }
+            };
+
             return (
                 <div className="min-h-screen pb-20">
                     {/* Header */}
@@ -247,12 +274,66 @@
                                         <p className="text-sm text-green-800 font-semibold">✓ Descrizioni caricate</p>
                                         <p className="text-xs text-green-600">{descrizioni.length} voci disponibili</p>
                                     </div>
-                                    <button
-                                        onClick={resetDescrizioni}
-                                        className="text-blue-600 text-sm font-semibold"
-                                    >
-                                        Ricarica
-                                    </button>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => setShowGestioneDescrizioni(!showGestioneDescrizioni)}
+                                            className="text-blue-600 text-sm font-semibold"
+                                        >
+                                            {showGestioneDescrizioni ? 'Chiudi' : 'Gestisci'}
+                                        </button>
+                                        <button
+                                            onClick={resetDescrizioni}
+                                            className="text-blue-600 text-sm font-semibold"
+                                        >
+                                            Ricarica
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Gestione Descrizioni */}
+                        {loaded && showGestioneDescrizioni && (
+                            <div className="bg-white rounded-lg shadow-md p-4">
+                                <h2 className="text-lg font-semibold mb-4">📝 Gestisci Descrizioni</h2>
+                                
+                                {/* Aggiungi nuova descrizione */}
+                                <div className="mb-4 pb-4 border-b border-gray-200">
+                                    <label className="block text-sm font-semibold mb-2">Aggiungi Nuova</label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            value={nuovaDescrizione}
+                                            onChange={(e) => setNuovaDescrizione(e.target.value)}
+                                            onKeyPress={(e) => e.key === 'Enter' && aggiungiDescrizione()}
+                                            className="flex-1 border border-gray-300 rounded-lg p-3 text-base"
+                                            placeholder="Nuova descrizione..."
+                                        />
+                                        <button
+                                            onClick={aggiungiDescrizione}
+                                            className="bg-green-600 text-white px-4 py-3 rounded-lg font-semibold active:bg-green-700 whitespace-nowrap"
+                                        >
+                                            + Aggiungi
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Lista descrizioni */}
+                                <div>
+                                    <p className="text-sm font-semibold mb-2">Descrizioni Salvate ({descrizioni.length})</p>
+                                    <div className="max-h-96 overflow-y-auto space-y-1">
+                                        {descrizioni.map((desc, index) => (
+                                            <div key={index} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
+                                                <span className="text-sm flex-1">{desc}</span>
+                                                <button
+                                                    onClick={() => rimuoviDescrizione(desc)}
+                                                    className="text-red-600 text-xl ml-2 px-2"
+                                                >
+                                                    ×
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
                         )}
