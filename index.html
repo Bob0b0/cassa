@@ -244,6 +244,7 @@
             flex: 1;
         }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -350,35 +351,29 @@
             reader.onload = function(event) {
                 try {
                     const data = new Uint8Array(event.target.result);
-                    // Usa SheetJS da CDN
-                    const script = document.createElement('script');
-                    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js';
-                    script.onload = function() {
-                        const workbook = XLSX.read(data, { type: 'array' });
-                        let sheet = workbook.Sheets['codici personali'];
-                        if (!sheet) {
-                            sheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    let sheet = workbook.Sheets['codici personali'];
+                    if (!sheet) {
+                        sheet = workbook.Sheets[workbook.SheetNames[0]];
+                    }
+                    
+                    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+                    const descs = [];
+                    
+                    for (let i = 1; i < rows.length; i++) {
+                        const row = rows[i];
+                        if (row[0]) {
+                            const cognome = String(row[0]).trim();
+                            const nome = row[1] ? String(row[1]).trim() : '';
+                            const desc = nome ? `${cognome} ${nome}` : cognome;
+                            if (desc.length > 0) descs.push(desc);
                         }
-                        
-                        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-                        const descs = [];
-                        
-                        for (let i = 1; i < rows.length; i++) {
-                            const row = rows[i];
-                            if (row[0]) {
-                                const cognome = String(row[0]).trim();
-                                const nome = row[1] ? String(row[1]).trim() : '';
-                                const desc = nome ? `${cognome} ${nome}` : cognome;
-                                if (desc.length > 0) descs.push(desc);
-                            }
-                        }
-                        
-                        descrizioni = [...new Set(descs)].sort();
-                        localStorage.setItem('descrizioni', JSON.stringify(descrizioni));
-                        showDescrizioniCaricate();
-                        alert('✓ Caricate ' + descrizioni.length + ' descrizioni');
-                    };
-                    document.head.appendChild(script);
+                    }
+                    
+                    descrizioni = [...new Set(descs)].sort();
+                    localStorage.setItem('descrizioni', JSON.stringify(descrizioni));
+                    showDescrizioniCaricate();
+                    alert('✓ Caricate ' + descrizioni.length + ' descrizioni');
                 } catch (error) {
                     alert('Errore: ' + error.message);
                 }
