@@ -352,29 +352,44 @@
                 try {
                     const data = new Uint8Array(event.target.result);
                     const workbook = XLSX.read(data, { type: 'array' });
-                    let sheet = workbook.Sheets['codici personali'];
+                    
+                    // Prova a trovare il foglio dell'anno corrente (2026, 2025, etc.)
+                    const currentYear = new Date().getFullYear().toString();
+                    let sheet = workbook.Sheets[currentYear];
+                    
+                    // Se non esiste, prova il primo foglio
                     if (!sheet) {
                         sheet = workbook.Sheets[workbook.SheetNames[0]];
                     }
                     
+                    console.log('Foglio utilizzato:', Object.keys(workbook.Sheets).find(k => workbook.Sheets[k] === sheet));
+                    
                     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+                    console.log('Righe lette:', rows.length);
+                    
                     const descs = [];
                     
+                    // Leggi TUTTE le righe
+                    // Colonna C (indice 2) contiene la Descrizione
                     for (let i = 1; i < rows.length; i++) {
                         const row = rows[i];
-                        if (row[0]) {
-                            const cognome = String(row[0]).trim();
-                            const nome = row[1] ? String(row[1]).trim() : '';
-                            const desc = nome ? `${cognome} ${nome}` : cognome;
-                            if (desc.length > 0) descs.push(desc);
+                        if (row && row[2]) { // Colonna C è l'indice 2
+                            const descrizione = String(row[2]).trim();
+                            if (descrizione.length > 2) { // Scarta descrizioni troppo corte
+                                descs.push(descrizione);
+                            }
                         }
                     }
                     
+                    console.log('Descrizioni estratte:', descs.length);
+                    
+                    // Elimina duplicati e ordina
                     descrizioni = [...new Set(descs)].sort();
                     localStorage.setItem('descrizioni', JSON.stringify(descrizioni));
                     showDescrizioniCaricate();
-                    alert('✓ Caricate ' + descrizioni.length + ' descrizioni');
+                    alert('✓ Caricate ' + descrizioni.length + ' descrizioni diverse');
                 } catch (error) {
+                    console.error('Errore completo:', error);
                     alert('Errore: ' + error.message);
                 }
             };
